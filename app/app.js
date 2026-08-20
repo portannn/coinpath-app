@@ -190,6 +190,20 @@ function initFirebase() {
   auth = firebase.auth();
   db = firebase.firestore();
 
+  // Firestore streams updates over a long-lived WebChannel connection. Plenty
+  // of real networks quietly break it — ISP proxies, corporate filtering, some
+  // antivirus HTTPS inspection, a few VPNs — and when that happens the SDK
+  // never reaches the server and the app sits in "offline" forever even though
+  // the connection is fine. Auto-detect falls back to long polling instead.
+  // Must be called before any other Firestore use.
+  try {
+    if (typeof db.settings === 'function') {
+      db.settings({ experimentalAutoDetectLongPolling: true, merge: true });
+    }
+  } catch (e) {
+    console.warn('Could not apply Firestore transport settings:', e);
+  }
+
   // Offline cache so the app works with no connection and syncs on reconnect.
   db.enablePersistence({ synchronizeTabs: true }).catch(function (err) {
     console.warn('Offline persistence unavailable:', err && err.code);
@@ -293,10 +307,45 @@ function wireAuth() {
 
 function userRef() { return db.collection('users').doc(state.user.uid); }
 
-function setSync(kind, text) {
+const SYNC_EXPLAIN = {
+  synced:  'Everything is saved to your account and up to date on all your devices.',
+  saving:  'Saving your latest change to the server — it will only take a moment.',
+  waiting: 'Your data is safe on this device, but it has not reached the server yet, ' +
+           'so other devices will not see it until this clears. Usually it sorts itself ' +
+           'out in a few seconds. If it persists, try a different network — some Wi-Fi ' +
+           'and VPN setups block the connection Firestore uses.',
+  offline: 'No internet connection. Keep using the app as normal — everything you enter ' +
+           'is saved on this device and uploads automatically when you reconnect.',
+  error:   'Could not reach your database. Check that your Firestore rules are published.'
+};
+
+let syncStatusKey = 'synced';
+
+function setSync(kind, text, explainKey) {
   const pill = $('#syncPill');
   pill.className = 'sync-pill' + (kind ? ' ' + kind : '');
   $('#syncText').textContent = text;
+  if (explainKey) syncStatusKey = explainKey;
+  pill.setAttribute('title', SYNC_EXPLAIN[syncStatusKey] || '');
+}
+
+/** Report the honest state, distinguishing "you have no internet" from
+ *  "you have internet but we can't reach the server". Those look identical
+ *  to the user and have completely different fixes. */
+function refreshSyncStatus(snap) {
+  if (!navigator.onLine) {
+    setSync('offline', 'Offline', 'offline');
+    return;
+  }
+  if (snap && snap.metadata && snap.metadata.hasPendingWrites) {
+    setSync('', 'Saving…', 'saving');
+    return;
+  }
+  if (snap && snap.metadata && snap.metadata.fromCache) {
+    setSync('offline', 'Reconnecting…', 'waiting');
+    return;
+  }
+  setSync('', 'Synced', 'synced');
 }
 
 function stopSync() {
@@ -312,7 +361,7 @@ function stopSync() {
 
 function startSync(uid) {
   stopSync();
-  setSync('', 'Syncing…');
+  setSync('', 'Syncing…', 'saving');
   const ref = db.collection('users').doc(uid);
 
   state.unsubs.push(
@@ -322,11 +371,11 @@ function startSync(uid) {
           return Object.assign({ id: d.id }, d.data());
         });
         state.ready.tx = true;
-        setSync(snap.metadata.fromCache ? 'offline' : '', snap.metadata.fromCache ? 'Offline' : 'Synced');
+        refreshSyncStatus(snap);
         afterData();
       }, function (err) {
         console.error(err);
-        setSync('error', 'Sync error');
+        setSync('error', 'Sync error', 'error');
         toast('Could not load transactions — check your Firestore rules.');
       })
   );
@@ -1831,8 +1880,13 @@ function wireApp() {
   });
 
   /* --- connectivity --- */
-  window.addEventListener('online', function () { setSync('', 'Synced'); });
-  window.addEventListener('offline', function () { setSync('offline', 'Offline'); });
+  window.addEventListener('online', function () { refreshSyncStatus(null); });
+  window.addEventListener('offline', function () { refreshSyncStatus(null); });
+
+  // Tapping the status pill explains what it currently means.
+  $('#syncPill').addEventListener('click', function () {
+    toast(SYNC_EXPLAIN[syncStatusKey] || '');
+  });
 
   // deep link ?screen=add from the manifest shortcut
   const params = new URLSearchParams(location.search);

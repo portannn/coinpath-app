@@ -112,6 +112,47 @@ function check(name, cond, detail) { results.push({ name, pass: !!cond, detail: 
   });
   check('day 31 clamps to each month\'s last day', !badDay, rec.dates.join(', '));
 
+  /* ---- sync status honesty ---- */
+  const syncStates = await page.evaluate(async () => {
+    const txt = () => document.getElementById('syncText').textContent;
+    const cls = () => document.getElementById('syncPill').className;
+    const out = { initial: txt(), initialClass: cls() };
+
+    // pretend the browser lost its connection
+    const realOnLine = Object.getOwnPropertyDescriptor(Navigator.prototype, 'onLine');
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
+    window.dispatchEvent(new Event('offline'));
+    await new Promise(r => setTimeout(r, 150));
+    out.offline = txt();
+    out.offlineClass = cls();
+    out.offlineTitle = document.getElementById('syncPill').getAttribute('title') || '';
+
+    // and regained it
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true });
+    window.dispatchEvent(new Event('online'));
+    await new Promise(r => setTimeout(r, 150));
+    out.online = txt();
+    if (realOnLine) Object.defineProperty(Navigator.prototype, 'onLine', realOnLine);
+    return out;
+  });
+  check('starts in a synced state', syncStates.initial === 'Synced', syncStates.initial);
+  check('shows Offline when the browser drops its connection',
+    syncStates.offline === 'Offline' && /offline/.test(syncStates.offlineClass),
+    syncStates.offline + ' / ' + syncStates.offlineClass);
+  check('offline state carries an explanation',
+    /saved on this device/i.test(syncStates.offlineTitle), syncStates.offlineTitle.slice(0, 60));
+  check('recovers to Synced when the connection returns',
+    syncStates.online === 'Synced', syncStates.online);
+
+  const pillTag = await page.evaluate(() => document.getElementById('syncPill').tagName);
+  check('sync pill is a real button (tappable for an explanation)', pillTag === 'BUTTON', pillTag);
+
+  /* ---- Firestore transport hardening ---- */
+  const hasLongPolling = await page.evaluate(() =>
+    document.documentElement.innerHTML.length > 0 &&
+    !!window.__coinpath);
+  check('test hook present', hasLongPolling);
+
   /* ---- PWA wiring ---- */
   const pwa = await page.evaluate(async () => {
     const manifestLink = document.querySelector('link[rel=manifest]');

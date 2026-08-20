@@ -120,6 +120,7 @@
   function Firestore() {}
   Firestore.prototype.collection = function (name) { return new ColRef(name); };
   Firestore.prototype.enablePersistence = function () { return Promise.resolve(); };
+  Firestore.prototype.settings = function () { /* transport settings no-op */ };
   Firestore.prototype.batch = function () {
     const ops = [];
     return {

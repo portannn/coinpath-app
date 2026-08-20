@@ -585,7 +585,11 @@ table.data-table td.num { text-align: right; font-variant-numeric: tabular-nums;
 .sync-pill {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 0.7rem; color: var(--text-muted); font-weight: 600;
+  cursor: pointer; padding: 6px 8px; margin: -6px -4px -6px 0;
+  border-radius: 999px; background: none; border: none;
+  white-space: nowrap;
 }
+.sync-pill:hover { background: var(--surface-2); }
 .sync-pill .s-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
 .sync-pill.offline .s-dot { background: var(--warning); }
 .sync-pill.error   .s-dot { background: var(--critical); }

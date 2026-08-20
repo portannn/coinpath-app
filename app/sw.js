@@ -1,7 +1,7 @@
 /* Coinpath service worker — offline app shell.
    Bump CACHE_VERSION whenever you deploy new app files. */
 
-const CACHE_VERSION = 'coinpath-v2';
+const CACHE_VERSION = 'coinpath-v3';
 const SHELL = [
   './',
   './index.html',
