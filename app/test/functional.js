@@ -83,16 +83,59 @@ function check(name, cond, detail) {
   await page.waitForTimeout(500);
   check('delete removes transaction', !(await page.textContent('#recentList')).includes('Test market run'));
 
-  /* ---------- 6. budgets editing ---------- */
+  /* ---------- 6. budgets editing (per-month) ---------- */
   await page.click('.tabbar button[data-screen="budgets"]');
   await page.waitForTimeout(300);
+  const headingBefore = await page.textContent('#budgetsHeading');
+  check('budget heading names the month, not "this month"',
+    !/this month/i.test(headingBefore) && !/custom/.test(headingBefore), headingBefore);
+
   await page.click('#editBudgetsBtn');
   await page.waitForTimeout(400);
   await page.fill('#bud_groceries', '2000000');
-  await page.click('#budgetSave');
-  await page.waitForTimeout(500);
+  await page.click('#budgetSaveBtn');
+  await page.waitForTimeout(600);
   const budTxt = await page.textContent('#budgetList');
-  check('budget limit saved', budTxt.includes('2.000.000'), 'no 2.000.000 in budget list');
+  check('budget limit saved for the viewed month', budTxt.includes('2.000.000'), 'no 2.000.000 in budget list');
+  const headingAfter = await page.textContent('#budgetsHeading');
+  check('month is marked custom after editing', /custom/.test(headingAfter), headingAfter);
+
+  /* ---------- 6b. the override must NOT leak into other months ---------- */
+  await page.click('#prevMonth');
+  await page.waitForTimeout(500);
+  const prevBudTxt = await page.textContent('#budgetList');
+  const prevHeading = await page.textContent('#budgetsHeading');
+  check('previous month keeps the default limit', prevBudTxt.includes('1.500.000'),
+    'expected default 1.500.000 groceries, got: ' + prevBudTxt.slice(0, 140));
+  check('previous month is not marked custom', !/custom/.test(prevHeading), prevHeading);
+
+  /* ---------- 6c. reset an override ---------- */
+  await page.click('#nextMonth');
+  await page.waitForTimeout(500);
+  await page.click('#editBudgetsBtn');
+  await page.waitForTimeout(400);
+  const resetVisible = await page.locator('#budgetReset').isVisible();
+  check('reset option appears only on a customised month', resetVisible);
+  await page.click('#budgetReset');
+  await page.waitForTimeout(600);
+  const afterReset = await page.textContent('#budgetList');
+  const headingReset = await page.textContent('#budgetsHeading');
+  check('reset restores the default limit', afterReset.includes('1.500.000'), afterReset.slice(0, 140));
+  check('custom marker cleared after reset', !/custom/.test(headingReset), headingReset);
+
+  /* ---------- 6d. promoting to default changes other months ---------- */
+  await page.click('#editBudgetsBtn');
+  await page.waitForTimeout(400);
+  await page.fill('#bud_groceries', '2500000');
+  await page.click('#budgetSaveDefault');
+  await page.waitForTimeout(700);
+  await page.click('#prevMonth');
+  await page.waitForTimeout(500);
+  const prevAfterDefault = await page.textContent('#budgetList');
+  check('promoting to default applies to other months', prevAfterDefault.includes('2.500.000'),
+    prevAfterDefault.slice(0, 140));
+  await page.click('#nextMonth');
+  await page.waitForTimeout(400);
 
   /* ---------- 7. goals ---------- */
   await page.click('#addGoalBtn');

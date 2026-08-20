@@ -43,6 +43,29 @@
   </div>
 </div>
 
+<!-- ======================= SDK / CONNECTION GATE ====================== -->
+<div id="gateOffline" class="gate-wrap hidden">
+  <div class="gate">
+    <div class="brand">
+      <img src="./icons/icon-192.png" alt="">
+      <div>
+        <div class="b-name">Coinpath</div>
+        <div class="b-tag">Can't reach Firebase</div>
+      </div>
+    </div>
+    <h2>Couldn't load</h2>
+    <p>
+      Your settings look fine — the app just couldn't download Firebase, which it needs
+      the first time you open it on a device. Usually that means no internet connection.
+    </p>
+    <p class="muted-note" style="margin-top:-4px">
+      If you're definitely online, a network that blocks <code>gstatic.com</code>
+      (some office or school Wi-Fi) will also cause this. Try mobile data.
+    </p>
+    <button class="btn-primary" onclick="location.reload()">Try again</button>
+  </div>
+</div>
+
 <!-- ============================ AUTH GATE ============================ -->
 <div id="gateAuth" class="gate-wrap hidden">
   <div class="gate">
@@ -156,7 +179,7 @@
   <section class="screen" id="screen-budgets">
     <div class="card">
       <h2>
-        This month's limits
+        <span id="budgetsHeading">Limits</span>
         <button class="link-btn" id="editBudgetsBtn">Edit</button>
       </h2>
       <div id="budgetList"></div>
@@ -362,12 +385,20 @@
   <div class="sheet-head">
     <button data-close-sheet="budgetSheet">Cancel</button>
     <h2 id="budgetSheetTitle">Monthly limits</h2>
-    <button class="primary" id="budgetSave">Save</button>
+    <span style="width:52px"></span>
   </div>
   <div class="sheet-body">
-    <p class="muted-note" style="margin-top:0">Set a limit per category. Leave blank or 0 for no limit.</p>
+    <p class="muted-note" style="margin-top:0" id="budgetScopeNote"></p>
+    <p class="muted-note" style="margin-top:6px">Leave blank or 0 for no limit.</p>
     <div id="budgetInputs"></div>
+    <div id="budgetResetRow" class="hidden">
+      <button class="btn-secondary" id="budgetReset">Reset this month to my default</button>
+    </div>
     <div style="height:14px"></div>
+  </div>
+  <div class="sheet-footer">
+    <button class="btn-primary" id="budgetSaveBtn">Save</button>
+    <button class="btn-secondary" id="budgetSaveDefault">Also make this my default</button>
   </div>
 </div>
 

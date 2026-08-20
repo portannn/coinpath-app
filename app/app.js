@@ -35,7 +35,8 @@ const MAX_BACKFILL_MONTHS = 24;
 const state = {
   user: null,
   transactions: [],          // all transactions, newest first
-  budgets: { ...DEFAULT_BUDGETS },
+  budgets: { ...DEFAULT_BUDGETS },   // the default template, used by any month with no override
+  monthlyBudgets: {},                // "YYYY-MM" -> budgets object, only for customised months
   categories: [...DEFAULT_CATEGORIES],
   goals: [],
   recurring: [],
@@ -166,14 +167,23 @@ let db = null;
 
 function initFirebase() {
   const cfg = window.FIREBASE_CONFIG;
+
+  // Distinguish the two very different failures below, because telling
+  // someone their keys are missing when the real problem is a blocked CDN
+  // sends them hunting for a bug that isn't there.
   if (configLooksUnset(cfg)) {
-    show('gateSetup');
+    show('gateSetup');                 // keys genuinely not filled in
+    return false;
+  }
+  if (typeof firebase === 'undefined' || !firebase.initializeApp) {
+    show('gateOffline');               // keys fine; the SDK never downloaded
+    console.error('Firebase SDK failed to load (offline, or gstatic.com blocked).');
     return false;
   }
   try {
     if (!firebase.apps.length) firebase.initializeApp(cfg);
   } catch (e) {
-    show('gateSetup');
+    show('gateOffline');
     console.error('Firebase init failed', e);
     return false;
   }
@@ -201,7 +211,7 @@ function initFirebase() {
 }
 
 function show(which) {
-  ['gateSetup', 'gateAuth', 'loadingView', 'app'].forEach(function (id) {
+  ['gateSetup', 'gateOffline', 'gateAuth', 'loadingView', 'app'].forEach(function (id) {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('hidden', id !== which);
   });
@@ -295,6 +305,7 @@ function stopSync() {
   state.transactions = [];
   state.goals = [];
   state.recurring = [];
+  state.monthlyBudgets = {};
   state.ready = { tx: false, settings: false, goals: false, recurring: false };
   state.recurringRunFor = null;
 }
@@ -334,6 +345,18 @@ function startSync(uid) {
         }).catch(function (e) { console.warn(e); });
       }
       state.ready.settings = true;
+      afterData();
+    }, function (err) { console.error(err); })
+  );
+
+  state.unsubs.push(
+    ref.collection('monthlyBudgets').onSnapshot(function (snap) {
+      const map = {};
+      snap.docs.forEach(function (d) {
+        const data = d.data() || {};
+        map[d.id] = data.budgets || {};
+      });
+      state.monthlyBudgets = map;
       afterData();
     }, function (err) { console.error(err); })
   );
@@ -481,9 +504,20 @@ function expenseUpTo(ym, maxDay) {
   return sum;
 }
 
-function totalBudget() {
+/** Limits in force for a given month: that month's override if it has one,
+ *  otherwise the default template. */
+function budgetsFor(ym) {
+  const override = state.monthlyBudgets[ym];
+  return override ? override : state.budgets;
+}
+function monthIsCustomised(ym) {
+  return !!state.monthlyBudgets[ym];
+}
+
+function totalBudget(ym) {
+  const b = budgetsFor(ym || state.viewMonth);
   let sum = 0;
-  Object.keys(state.budgets).forEach(function (k) { sum += Number(state.budgets[k]) || 0; });
+  Object.keys(b).forEach(function (k) { sum += Number(b[k]) || 0; });
   return sum;
 }
 
@@ -522,8 +556,9 @@ function buildAlerts(ym) {
 
   // 1. over / near budget, worst first
   const rows = [];
-  Object.keys(state.budgets).forEach(function (id) {
-    const limit = Number(state.budgets[id]) || 0;
+  const limits = budgetsFor(ym);
+  Object.keys(limits).forEach(function (id) {
+    const limit = Number(limits[id]) || 0;
     if (limit <= 0) return;
     const spent = cats[id] || 0;
     const st = budgetStatus(spent, limit);
@@ -551,7 +586,7 @@ function buildAlerts(ym) {
 
   // 2. pace projection for the current month
   const tot = monthTotals(ym);
-  const budget = totalBudget();
+  const budget = totalBudget(ym);
   if (isCurrent && progress > 0.15 && budget > 0 && tot.expense > 0) {
     const projected = tot.expense / progress;
     if (projected > budget * 1.05) {
@@ -706,7 +741,7 @@ function renderAll() {
 function renderHome() {
   const ym = state.viewMonth;
   const tot = monthTotals(ym);
-  const budget = totalBudget();
+  const budget = totalBudget(ym);
   const progress = monthProgress(ym);
 
   // hero: left to spend against total budget (or net if no budget set)
@@ -795,8 +830,12 @@ function renderBudgets() {
     .filter(function (c) { return c.id !== 'income'; })
     .map(function (c) { return c.id; });
 
+  $('#budgetsHeading').textContent = monthLabel(ym, { month: 'long' }) + ' limits' +
+    (monthIsCustomised(ym) ? ' · custom' : '');
+
+  const limits = budgetsFor(ym);
   const rows = ids.map(function (id) {
-    const limit = Number(state.budgets[id]) || 0;
+    const limit = Number(limits[id]) || 0;
     const spent = cats[id] || 0;
     return { id: id, limit: limit, spent: spent, st: budgetStatus(spent, limit) };
   }).filter(function (r) { return r.limit > 0 || r.spent > 0; })
@@ -1258,9 +1297,22 @@ function deleteTx() {
 /* ---- budget sheet ---- */
 
 function openBudgetSheet() {
+  const ym = state.viewMonth;
+  const limits = budgetsFor(ym);
+  const custom = monthIsCustomised(ym);
+  const monthName = monthLabel(ym, { month: 'long', year: 'numeric' });
+
+  $('#budgetSheetTitle').textContent = 'Limits for ' + monthLabel(ym, { month: 'long' });
+  $('#budgetScopeNote').innerHTML = custom
+    ? '<strong>' + escapeHtml(monthName) + '</strong> has its own limits. Changes here affect this month only.'
+    : 'Editing these sets limits for <strong>' + escapeHtml(monthName) + '</strong> only. Other months keep your usual amounts.';
+
+  $('#budgetResetRow').classList.toggle('hidden', !custom);
+  $('#budgetSaveBtn').textContent = 'Save for ' + monthLabel(ym, { month: 'long' });
+
   const pool = state.categories.filter(function (c) { return c.id !== 'income'; });
   $('#budgetInputs').innerHTML = pool.map(function (c) {
-    const v = Number(state.budgets[c.id]) || 0;
+    const v = Number(limits[c.id]) || 0;
     return '<div class="field">' +
       '<label for="bud_' + escapeHtml(c.id) + '">' + escapeHtml(c.emoji + ' ' + c.name) + '</label>' +
       '<input type="number" inputmode="numeric" id="bud_' + escapeHtml(c.id) + '" data-cat="' + escapeHtml(c.id) +
@@ -1270,16 +1322,50 @@ function openBudgetSheet() {
   openSheet('budgetSheet');
 }
 
-function saveBudgets() {
+function collectBudgetInputs() {
   const next = {};
   $$('#budgetInputs input').forEach(function (inp) {
     const v = Number(inp.value) || 0;
     if (v > 0) next[inp.getAttribute('data-cat')] = v;
   });
-  state.budgets = next;
-  userRef().collection('settings').doc('prefs').set({ budgets: next }, { merge: true })
+  return next;
+}
+
+/** Save the edited limits against the viewed month only. */
+function saveBudgets() {
+  const ym = state.viewMonth;
+  const next = collectBudgetInputs();
+  state.monthlyBudgets[ym] = next;
+  userRef().collection('monthlyBudgets').doc(ym).set({ budgets: next, updatedAt: Date.now() })
     .catch(function (e) { console.error(e); toast('Could not save limits.'); });
-  toast('Limits saved');
+  toast('Limits saved for ' + monthLabel(ym, { month: 'long' }));
+  closeSheets();
+  renderAll();
+}
+
+/** Escape hatch: promote the edited limits to the default every other month uses. */
+function saveBudgetsAsDefault() {
+  const ym = state.viewMonth;
+  const next = collectBudgetInputs();
+  state.budgets = next;
+  state.monthlyBudgets[ym] = next;
+  const ref = userRef();
+  const batch = db.batch();
+  batch.set(ref.collection('settings').doc('prefs'), { budgets: next }, { merge: true });
+  batch.set(ref.collection('monthlyBudgets').doc(ym), { budgets: next, updatedAt: Date.now() });
+  batch.commit().catch(function (e) { console.error(e); toast('Could not save limits.'); });
+  toast('Saved as your default');
+  closeSheets();
+  renderAll();
+}
+
+/** Drop this month's override so it follows the default again. */
+function resetMonthBudgets() {
+  const ym = state.viewMonth;
+  delete state.monthlyBudgets[ym];
+  userRef().collection('monthlyBudgets').doc(ym).delete()
+    .catch(function (e) { console.error(e); });
+  toast(monthLabel(ym, { month: 'long' }) + ' back to default');
   closeSheets();
   renderAll();
 }
@@ -1659,7 +1745,9 @@ function wireApp() {
 
   /* --- budgets --- */
   $('#editBudgetsBtn').addEventListener('click', openBudgetSheet);
-  $('#budgetSave').addEventListener('click', saveBudgets);
+  $('#budgetSaveBtn').addEventListener('click', saveBudgets);
+  $('#budgetSaveDefault').addEventListener('click', saveBudgetsAsDefault);
+  $('#budgetReset').addEventListener('click', resetMonthBudgets);
 
   /* --- goals --- */
   $('#addGoalBtn').addEventListener('click', function () { openGoalSheet(null); });
