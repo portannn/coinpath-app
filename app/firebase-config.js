@@ -11,7 +11,7 @@
    in firestore.rules, not by hiding these.)
    ============================================================ */
 
-const firebaseConfig = {
+window.FIREBASE_CONFIG = {
   apiKey: "AIzaSyCu49ySNLEErlGXzC3VgIOS4pwtSBC2dG8",
   authDomain: "coinpath-40bcd.firebaseapp.com",
   projectId: "coinpath-40bcd",
