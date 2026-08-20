@@ -1,0 +1,8 @@
+# Development-only files — never deployed.
+test/
+harness.html
+make_icons.py
+README.md
+firestore.rules
+.DS_Store
+node_modules/
