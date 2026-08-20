@@ -137,6 +137,46 @@ function check(name, cond, detail) {
   await page.click('#nextMonth');
   await page.waitForTimeout(400);
 
+  /* ---------- 6e. monthly allowance ---------- */
+  await page.click('.tabbar button[data-screen="home"]');
+  await page.waitForTimeout(300);
+  const heroBudLabelNoAllowance = await page.textContent('#heroBudgetLabel');
+  check('hero falls back to category budgets when no allowance is set',
+    /budgeted/i.test(heroBudLabelNoAllowance) && !/allowance/i.test(heroBudLabelNoAllowance),
+    heroBudLabelNoAllowance);
+
+  await page.click('.tabbar button[data-screen="budgets"]');
+  await page.waitForTimeout(300);
+  await page.click('#editBudgetsBtn');
+  await page.waitForTimeout(400);
+  const allowancePrefill = await page.inputValue('#budgetAllowanceInput');
+  check('allowance input starts empty when unset', allowancePrefill === '', 'got ' + allowancePrefill);
+  await page.fill('#budgetAllowanceInput', '1000000');
+  await page.click('#budgetSaveBtn');
+  await page.waitForTimeout(600);
+  const allowSummary = await page.textContent('#allowanceSummary');
+  check('over-allocation warning shown when category limits exceed the allowance',
+    /over your/i.test(allowSummary) && allowSummary.includes('1.000.000'), allowSummary.slice(0, 160));
+
+  await page.click('.tabbar button[data-screen="home"]');
+  await page.waitForTimeout(400);
+  const heroVal = await page.textContent('#heroValue');
+  const heroBudLabel = await page.textContent('#heroBudgetLabel');
+  check('hero "left to spend" uses the allowance as the ceiling once one is set',
+    heroVal.includes('1.000.000') && /allowance/i.test(heroBudLabel),
+    heroVal + ' / ' + heroBudLabel);
+
+  /* ---------- 6f. resetting the month clears the allowance override too ---------- */
+  await page.click('.tabbar button[data-screen="budgets"]');
+  await page.waitForTimeout(300);
+  await page.click('#editBudgetsBtn');
+  await page.waitForTimeout(400);
+  await page.click('#budgetReset');
+  await page.waitForTimeout(600);
+  const allowSummaryAfterReset = await page.textContent('#allowanceSummary');
+  check('resetting the month clears the allowance override too',
+    allowSummaryAfterReset.trim() === '', 'got: ' + allowSummaryAfterReset.slice(0, 80));
+
   /* ---------- 7. goals ---------- */
   await page.click('#addGoalBtn');
   await page.waitForTimeout(400);

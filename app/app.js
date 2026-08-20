@@ -36,7 +36,8 @@ const state = {
   user: null,
   transactions: [],          // all transactions, newest first
   budgets: { ...DEFAULT_BUDGETS },   // the default template, used by any month with no override
-  monthlyBudgets: {},                // "YYYY-MM" -> budgets object, only for customised months
+  allowance: 0,                      // default monthly allowance/income ceiling (0 = not set)
+  monthlyBudgets: {},                // "YYYY-MM" -> { budgets, allowance }, only for customised months
   categories: [...DEFAULT_CATEGORIES],
   goals: [],
   recurring: [],
@@ -385,10 +386,12 @@ function startSync(uid) {
       if (snap.exists) {
         const d = snap.data() || {};
         state.budgets = d.budgets || { ...DEFAULT_BUDGETS };
+        state.allowance = Number(d.allowance) || 0;
         state.categories = (d.categories && d.categories.length) ? d.categories : [...DEFAULT_CATEGORIES];
       } else {
         ref.collection('settings').doc('prefs').set({
           budgets: DEFAULT_BUDGETS,
+          allowance: 0,
           categories: DEFAULT_CATEGORIES,
           createdAt: Date.now()
         }).catch(function (e) { console.warn(e); });
@@ -403,7 +406,7 @@ function startSync(uid) {
       const map = {};
       snap.docs.forEach(function (d) {
         const data = d.data() || {};
-        map[d.id] = data.budgets || {};
+        map[d.id] = { budgets: data.budgets || {}, allowance: Number(data.allowance) || 0 };
       });
       state.monthlyBudgets = map;
       afterData();
@@ -557,10 +560,17 @@ function expenseUpTo(ym, maxDay) {
  *  otherwise the default template. */
 function budgetsFor(ym) {
   const override = state.monthlyBudgets[ym];
-  return override ? override : state.budgets;
+  return override ? override.budgets : state.budgets;
 }
 function monthIsCustomised(ym) {
   return !!state.monthlyBudgets[ym];
+}
+
+/** Monthly allowance in force for a given month: that month's override if it
+ *  has one, otherwise the default. 0 means "no allowance set". */
+function allowanceFor(ym) {
+  const override = state.monthlyBudgets[ym];
+  return override ? (Number(override.allowance) || 0) : (Number(state.allowance) || 0);
 }
 
 function totalBudget(ym) {
@@ -568,6 +578,16 @@ function totalBudget(ym) {
   let sum = 0;
   Object.keys(b).forEach(function (k) { sum += Number(b[k]) || 0; });
   return sum;
+}
+
+/** The ceiling used for "left to spend" style math: the monthly allowance
+ *  when one is set, otherwise the sum of category limits (old behaviour). */
+function budgetCeiling(ym) {
+  const allowance = allowanceFor(ym);
+  if (allowance > 0) return { amount: allowance, kind: 'allowance' };
+  const total = totalBudget(ym);
+  if (total > 0) return { amount: total, kind: 'budgets' };
+  return null;
 }
 
 function budgetStatus(spent, limit) {
@@ -635,19 +655,22 @@ function buildAlerts(ym) {
 
   // 2. pace projection for the current month
   const tot = monthTotals(ym);
-  const budget = totalBudget(ym);
+  const ceiling = budgetCeiling(ym);
+  const budget = ceiling ? ceiling.amount : 0;
+  const ceilingWord = ceiling && ceiling.kind === 'allowance' ? 'your monthly allowance' : 'your total budget';
   if (isCurrent && progress > 0.15 && budget > 0 && tot.expense > 0) {
     const projected = tot.expense / progress;
     if (projected > budget * 1.05) {
       alerts.push({
         kind: 'warning',
         html: 'At this pace you will spend about <strong>' + fmtMoney(projected) +
-              '</strong> this month — ' + fmtMoney(projected - budget) + ' over your total budget.'
+              '</strong> this month — ' + fmtMoney(projected - budget) + ' over ' + ceilingWord + '.'
       });
     } else if (projected < budget * 0.85) {
       alerts.push({
         kind: 'good',
-        html: 'On pace to finish around <strong>' + fmtMoney(projected) + '</strong> — comfortably under budget.'
+        html: 'On pace to finish around <strong>' + fmtMoney(projected) + '</strong> — comfortably under ' +
+              (ceiling && ceiling.kind === 'allowance' ? 'your allowance' : 'budget') + '.'
       });
     }
   }
@@ -790,10 +813,12 @@ function renderAll() {
 function renderHome() {
   const ym = state.viewMonth;
   const tot = monthTotals(ym);
-  const budget = totalBudget(ym);
+  const ceiling = budgetCeiling(ym);
+  const budget = ceiling ? ceiling.amount : 0;
   const progress = monthProgress(ym);
 
-  // hero: left to spend against total budget (or net if no budget set)
+  // hero: left to spend against the allowance (preferred), falling back to
+  // the sum of category budgets, or net if neither is set
   if (budget > 0) {
     const left = budget - tot.expense;
     $('#heroLabel').textContent = 'Left to spend';
@@ -805,7 +830,7 @@ function renderHome() {
     bar.style.width = (pct * 100) + '%';
     bar.className = 'bar-fill ' + (st.key === 'none' ? '' : st.key);
     $('#heroSpentLabel').textContent = fmtMoney(tot.expense) + ' spent';
-    $('#heroBudgetLabel').textContent = 'of ' + fmtMoney(budget);
+    $('#heroBudgetLabel').textContent = 'of ' + fmtMoney(budget) + (ceiling.kind === 'allowance' ? ' allowance' : ' budgeted');
 
     const daysLeft = Math.max(0, daysInMonth(ym) - Math.round(progress * daysInMonth(ym)));
     if (ym === ymOf(new Date()) && daysLeft > 0 && left > 0) {
@@ -872,6 +897,29 @@ function txRowHtml(t) {
   '</button>';
 }
 
+/** Allowance vs. what's actually allocated across category limits — shown
+ *  as a non-blocking heads-up on the Budgets screen. Hidden entirely when
+ *  no allowance is set (nothing to compare against). */
+function renderAllowanceSummary(ym) {
+  const el = $('#allowanceSummary');
+  const allowance = allowanceFor(ym);
+  if (!(allowance > 0)) {
+    el.innerHTML = '';
+    return;
+  }
+  const allocated = totalBudget(ym);
+  const diff = allowance - allocated;
+  const over = diff < 0;
+  const kind = over ? 'warning' : 'info';
+  const msg = over
+    ? 'Your category limits add up to <strong>' + fmtMoney(allocated) + '</strong> — <strong>' +
+      fmtMoney(-diff) + '</strong> over your ' + fmtMoney(allowance) + ' allowance.'
+    : '<strong>' + fmtMoney(allocated) + '</strong> allocated of your ' + fmtMoney(allowance) +
+      ' allowance — ' + fmtMoney(diff) + ' unallocated.';
+  el.innerHTML = '<div class="alert ' + kind + '"><span class="a-icon">' + STATUS_ICON[over ? 'warning' : 'info'] +
+    '</span><div class="a-body">' + msg + '</div></div>';
+}
+
 function renderBudgets() {
   const ym = state.viewMonth;
   const cats = categoryTotals(ym);
@@ -881,6 +929,8 @@ function renderBudgets() {
 
   $('#budgetsHeading').textContent = monthLabel(ym, { month: 'long' }) + ' limits' +
     (monthIsCustomised(ym) ? ' · custom' : '');
+
+  renderAllowanceSummary(ym);
 
   const limits = budgetsFor(ym);
   const rows = ids.map(function (id) {
@@ -1359,6 +1409,8 @@ function openBudgetSheet() {
   $('#budgetResetRow').classList.toggle('hidden', !custom);
   $('#budgetSaveBtn').textContent = 'Save for ' + monthLabel(ym, { month: 'long' });
 
+  $('#budgetAllowanceInput').value = allowanceFor(ym) || '';
+
   const pool = state.categories.filter(function (c) { return c.id !== 'income'; });
   $('#budgetInputs').innerHTML = pool.map(function (c) {
     const v = Number(limits[c.id]) || 0;
@@ -1380,28 +1432,35 @@ function collectBudgetInputs() {
   return next;
 }
 
-/** Save the edited limits against the viewed month only. */
+function collectAllowanceInput() {
+  return Number($('#budgetAllowanceInput').value) || 0;
+}
+
+/** Save the edited limits (and allowance) against the viewed month only. */
 function saveBudgets() {
   const ym = state.viewMonth;
   const next = collectBudgetInputs();
-  state.monthlyBudgets[ym] = next;
-  userRef().collection('monthlyBudgets').doc(ym).set({ budgets: next, updatedAt: Date.now() })
+  const allowance = collectAllowanceInput();
+  state.monthlyBudgets[ym] = { budgets: next, allowance: allowance };
+  userRef().collection('monthlyBudgets').doc(ym).set({ budgets: next, allowance: allowance, updatedAt: Date.now() })
     .catch(function (e) { console.error(e); toast('Could not save limits.'); });
   toast('Limits saved for ' + monthLabel(ym, { month: 'long' }));
   closeSheets();
   renderAll();
 }
 
-/** Escape hatch: promote the edited limits to the default every other month uses. */
+/** Escape hatch: promote the edited limits and allowance to the default every other month uses. */
 function saveBudgetsAsDefault() {
   const ym = state.viewMonth;
   const next = collectBudgetInputs();
+  const allowance = collectAllowanceInput();
   state.budgets = next;
-  state.monthlyBudgets[ym] = next;
+  state.allowance = allowance;
+  state.monthlyBudgets[ym] = { budgets: next, allowance: allowance };
   const ref = userRef();
   const batch = db.batch();
-  batch.set(ref.collection('settings').doc('prefs'), { budgets: next }, { merge: true });
-  batch.set(ref.collection('monthlyBudgets').doc(ym), { budgets: next, updatedAt: Date.now() });
+  batch.set(ref.collection('settings').doc('prefs'), { budgets: next, allowance: allowance }, { merge: true });
+  batch.set(ref.collection('monthlyBudgets').doc(ym), { budgets: next, allowance: allowance, updatedAt: Date.now() });
   batch.commit().catch(function (e) { console.error(e); toast('Could not save limits.'); });
   toast('Saved as your default');
   closeSheets();
@@ -1921,7 +1980,11 @@ if (window.__COINPATH_TEST__) {
     shiftYM: shiftYM,
     daysInMonth: daysInMonth,
     fmtCompact: fmtCompact,
-    fmtMoney: fmtMoney
+    fmtMoney: fmtMoney,
+    budgetsFor: budgetsFor,
+    allowanceFor: allowanceFor,
+    totalBudget: totalBudget,
+    budgetCeiling: budgetCeiling
   };
 }
 

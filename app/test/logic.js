@@ -65,6 +65,42 @@ function check(name, cond, detail) { results.push({ name, pass: !!cond, detail: 
   check('money formatting', dm.money[0] === 'Rp0' && dm.money[1] === '-Rp45.000' && dm.money[2] === 'Rp1.234.567',
     JSON.stringify(dm.money));
 
+  /* ---- allowance model: default vs. per-month override, ceiling selection ---- */
+  const al = await page.evaluate(async () => {
+    const c = window.__coinpath;
+    const uid = 'testuser';
+    const ymNow = c.state.viewMonth;
+    const ymOther = c.shiftYM(ymNow, -3);
+
+    const beforeDefault = c.allowanceFor(ymNow);
+    const beforeCeiling = c.budgetCeiling(ymNow);
+
+    await firebase.firestore().collection('users').doc(uid)
+      .collection('settings').doc('prefs').set({ allowance: 2000000 }, { merge: true });
+    await new Promise(r => setTimeout(r, 200));
+    const afterDefaultThis = c.allowanceFor(ymNow);
+    const afterDefaultOther = c.allowanceFor(ymOther);
+    const ceilingWithAllowance = c.budgetCeiling(ymNow);
+
+    await firebase.firestore().collection('users').doc(uid)
+      .collection('monthlyBudgets').doc(ymNow).set({ budgets: { groceries: 500000 }, allowance: 3000000 });
+    await new Promise(r => setTimeout(r, 200));
+    const overrideThisMonth = c.allowanceFor(ymNow);
+    const stillDefaultOtherMonth = c.allowanceFor(ymOther);
+
+    return { beforeDefault, beforeCeiling, afterDefaultThis, afterDefaultOther, ceilingWithAllowance, overrideThisMonth, stillDefaultOtherMonth };
+  });
+  check('no allowance set anywhere -> allowanceFor returns 0', al.beforeDefault === 0, String(al.beforeDefault));
+  check('with no allowance, the ceiling falls back to the category-budget total',
+    !!al.beforeCeiling && al.beforeCeiling.kind === 'budgets', JSON.stringify(al.beforeCeiling));
+  check('setting a default allowance applies to every month',
+    al.afterDefaultThis === 2000000 && al.afterDefaultOther === 2000000, JSON.stringify(al));
+  check('the ceiling prefers the allowance once one is set',
+    !!al.ceilingWithAllowance && al.ceilingWithAllowance.kind === 'allowance' && al.ceilingWithAllowance.amount === 2000000,
+    JSON.stringify(al.ceilingWithAllowance));
+  check('a per-month allowance override does not leak into other months',
+    al.overrideThisMonth === 3000000 && al.stillDefaultOtherMonth === 2000000, JSON.stringify(al));
+
   /* ---- recurring: month-end clamping + no double post ---- */
   const rec = await page.evaluate(async () => {
     const c = window.__coinpath;

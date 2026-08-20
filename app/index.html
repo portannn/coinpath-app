@@ -182,6 +182,7 @@
         <span id="budgetsHeading">Limits</span>
         <button class="link-btn" id="editBudgetsBtn">Edit</button>
       </h2>
+      <div id="allowanceSummary"></div>
       <div id="budgetList"></div>
     </div>
 
@@ -389,7 +390,11 @@
   </div>
   <div class="sheet-body">
     <p class="muted-note" style="margin-top:0" id="budgetScopeNote"></p>
-    <p class="muted-note" style="margin-top:6px">Leave blank or 0 for no limit.</p>
+    <div class="field">
+      <label for="budgetAllowanceInput">Monthly allowance</label>
+      <input type="number" inputmode="numeric" id="budgetAllowanceInput" placeholder="0">
+    </div>
+    <p class="muted-note" style="margin-top:6px">Your total income/allowance for the month — the category limits below are how you plan to spend it. Leave blank or 0 for no limit.</p>
     <div id="budgetInputs"></div>
     <div id="budgetResetRow" class="hidden">
       <button class="btn-secondary" id="budgetReset">Reset this month to my default</button>

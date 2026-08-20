@@ -283,6 +283,7 @@ a { color: var(--accent); }
   margin-bottom: 8px; font-size: 0.855rem; line-height: 1.4;
 }
 .alert:last-child { margin-bottom: 0; }
+#allowanceSummary:empty { display: none; }
 .alert .a-icon { flex: none; width: 19px; height: 19px; margin-top: 1px; }
 .alert.critical .a-icon { color: var(--critical); }
 .alert.warning  .a-icon { color: var(--warning); }
